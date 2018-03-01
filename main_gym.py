@@ -5,7 +5,8 @@ import argparse
 import os
 
 import utils
-import DDPG
+import DDPG_Discrete as DDPG
+# import TD3
 
 
 # Runs policy for X episodes and returns average reward
@@ -15,7 +16,10 @@ def evaluate_policy(policy, eval_episodes=10):
 		obs = env.reset()
 		done = False
 		while not done:
-			action = policy.select_action(np.array(obs)).clip(env.action_space.low, env.action_space.high)
+
+			action = policy.select_action(np.array(obs))
+			# action = policy.select_action(np.array(obs)).clip(env.action_space.low, env.action_space.high)
+			action  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())
 			obs, reward, done, _ = env.step(action)
 			avg_reward += reward
 
@@ -30,7 +34,7 @@ def evaluate_policy(policy, eval_episodes=10):
 if __name__ == "__main__":
 	
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--policy_name", default="DDPG")					# Policy name
+	parser.add_argument("--policy_name", default="TD3")					# Policy name
 	parser.add_argument("--env_name", default="LunarLander-v2")			# OpenAI gym environment name
 	parser.add_argument("--seed", default=0, type=int)					# Sets Gym, PyTorch and Numpy seeds
 	parser.add_argument("--start_timesteps", default=1e4, type=int)		# How many time steps purely random policy is run for
@@ -60,13 +64,15 @@ if __name__ == "__main__":
 	env = gym.make(args.env_name)
 
 	# Set seeds
-	env.seed(args.seed)
-	torch.manual_seed(args.seed)
-	np.random.seed(args.seed)
+	# env.seed(args.seed)
+	# torch.manual_seed(args.seed)
+	# np.random.seed(args.seed)
 	
+	max_action = 1
+
 	state_dim = env.observation_space.shape[0]
 	action_dim = env.action_space.shape[0] 
-	max_action = int(env.action_space.high[0])
+	# max_action = int(env.action_space.high[0])
 
 	# Initialize policy
 	if args.policy_name == "DDPG": policy = DDPG.DDPG(state_dim, action_dim, max_action)
@@ -110,15 +116,20 @@ if __name__ == "__main__":
 		# Select action randomly or according to policy
 		if total_timesteps < args.start_timesteps:
 			action = env.action_space.sample()
+			action = np.array(action, dtype=np.float64)
 		else:
 			action = policy.select_action(np.array(obs))
-			if args.expl_noise != 0: 
-				action = (action + np.random.normal(0, args.expl_noise, size=env.action_space.shape[0])).clip(env.action_space.low, env.action_space.high)
+			action  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())	
+			action = np.array(action, dtype=np.float64)
+			# if args.expl_noise != 0: 
+			# 	action = (action + np.random.normal(0, args.expl_noise, size=env.action_space.shape[0])).clip(env.action_space.low, env.action_space.high)
 
 		# Perform action
 		new_obs, reward, done, _ = env.step(action) 
 		done_bool = 0 if episode_timesteps + 1 == env._max_episode_steps else float(done)
 		episode_reward += reward
+
+		import pdb; pdb.set_trace()
 
 		# Store data in replay buffer
 		replay_buffer.add((obs, new_obs, action, reward, done_bool))
