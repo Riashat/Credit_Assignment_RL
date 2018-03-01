@@ -29,7 +29,7 @@ class Actor(nn.Module):
 		
 		self.max_action = max_action
 
-	
+	### TanH - used for continuous actions
 	def forward(self, x):
 		x = F.relu(self.l1(x))
 		x = F.relu(self.l2(x))
@@ -109,6 +109,7 @@ class DDPG(object):
 			self.critic_optimizer.step()
 
 			# Compute actor loss
+			### Optimize actor by backproping through the critic
 			actor_loss = -self.critic(state, self.actor(state)).mean()
 			
 			# Optimize the actor 
