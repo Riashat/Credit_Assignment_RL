@@ -6,7 +6,6 @@ import os
 
 import utils
 import DDPG
-# import TD3
 
 
 # Runs policy for X episodes and returns average reward
@@ -31,7 +30,7 @@ def evaluate_policy(policy, eval_episodes=10):
 if __name__ == "__main__":
 	
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--policy_name", default="TD3")					# Policy name
+	parser.add_argument("--policy_name", default="DDPG")					# Policy name
 	parser.add_argument("--env_name", default="LunarLander-v2")			# OpenAI gym environment name
 	parser.add_argument("--seed", default=0, type=int)					# Sets Gym, PyTorch and Numpy seeds
 	parser.add_argument("--start_timesteps", default=1e4, type=int)		# How many time steps purely random policy is run for
@@ -59,8 +58,6 @@ if __name__ == "__main__":
 
 
 	env = gym.make(args.env_name)
-
-	import pdb; pdb.set_trace()
 
 	# Set seeds
 	env.seed(args.seed)
