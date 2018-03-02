@@ -121,7 +121,6 @@ if __name__ == "__main__":
 		done_bool = 0 if episode_timesteps + 1 == env._max_episode_steps else float(done)
 		episode_reward += reward
 
-		import pdb; pdb.set_trace()
 		# Store data in replay buffer
 		replay_buffer.add((obs, new_obs, action, reward, done_bool))
 

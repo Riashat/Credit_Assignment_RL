@@ -113,23 +113,29 @@ if __name__ == "__main__":
 			episode_timesteps = 0
 			episode_num += 1 
 		
+		"""
+		We can do epsilon greedy here for discrete actions!
+		"""
 		# Select action randomly or according to policy
-		if total_timesteps < args.start_timesteps:
-			action = env.action_space.sample()
-			action = np.array(action, dtype=np.float64)
-		else:
-			action = policy.select_action(np.array(obs))
-			action  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())	
-			action = np.array(action, dtype=np.float64)
-			# if args.expl_noise != 0: 
-			# 	action = (action + np.random.normal(0, args.expl_noise, size=env.action_space.shape[0])).clip(env.action_space.low, env.action_space.high)
+		# if total_timesteps < args.start_timesteps:
+		# 	action = env.action_space()
+		# 	action_choice = env.action_space.sample()
+
+
+		action = policy.select_action(np.array(obs))
+		action_choice  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())	
+		
+		"""
+		Ignorining OU Noise here - need to add this back - encourages exploration, or do epislon greedy!
+		"""
+		# if args.expl_noise != 0: 
+		# 	action = (action + np.random.normal(0, args.expl_noise, size=env.action_space.shape[0])).clip(env.action_space.low, env.action_space.high)
 
 		# Perform action
-		new_obs, reward, done, _ = env.step(action) 
+		new_obs, reward, done, _ = env.step(action_choice) 
 		done_bool = 0 if episode_timesteps + 1 == env._max_episode_steps else float(done)
 		episode_reward += reward
 
-		import pdb; pdb.set_trace()
 
 		# Store data in replay buffer
 		replay_buffer.add((obs, new_obs, action, reward, done_bool))
