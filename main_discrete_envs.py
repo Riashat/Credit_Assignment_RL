@@ -55,8 +55,8 @@ if __name__ == "__main__":
 	print ("Settings: %s" % (file_name))
 	print ("---------------------------------------")
 
-	if not os.path.exists("./results"):
-		os.makedirs("./results")
+	if not os.path.exists("./results2"):
+		os.makedirs("./results2")
 	if args.save_models and not os.path.exists("./pytorch_models"):
 		os.makedirs("./pytorch_models")
 
@@ -64,9 +64,9 @@ if __name__ == "__main__":
 	env = gym.make(args.env_name)
 
 	# Set seeds
-	# env.seed(args.seed)
-	# torch.manual_seed(args.seed)
-	# np.random.seed(args.seed)
+	env.seed(args.seed)
+	torch.manual_seed(args.seed)
+	np.random.seed(args.seed)
 	
 	max_action = 1
 
@@ -87,16 +87,22 @@ if __name__ == "__main__":
 	episode_num = 0
 	done = True 
 
+	action_probs = np.array([])
 	while total_timesteps < args.max_timesteps:
 		
 		if done: 
 
 			if total_timesteps != 0: 
 				print(("Total T: %d Episode Num: %d Episode T: %d Reward: %f") % (total_timesteps, episode_num, episode_timesteps, episode_reward))
-				if args.policy_name == "TD3":
-					policy.train(replay_buffer, episode_timesteps, args.batch_size, args.discount, args.tau, args.policy_noise, args.noise_clip, args.policy_freq)
-				else: 
-					policy.train(replay_buffer, episode_timesteps, args.batch_size, args.discount, args.tau)
+				policy.train(replay_buffer, episode_timesteps, args.batch_size, args.discount, args.tau)
+
+				print ("Action Probs after training")
+				action = policy.select_action(np.array(obs))
+				action_choice  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())	
+
+				print ("Action Probabilities", action)
+				print ("Chosen Action", action_choice)
+
 			
 			# Evaluate episode
 			if timesteps_since_eval >= args.eval_freq:
@@ -104,7 +110,7 @@ if __name__ == "__main__":
 				evaluations.append(evaluate_policy(policy))
 				
 				if args.save_models: policy.save("%s" % (file_name), directory="./pytorch_models")
-				np.save("./results/%s" % (file_name), evaluations) 
+				np.save("./results2/%s" % (file_name), evaluations) 
 			
 			# Reset environment
 			obs = env.reset()
@@ -149,4 +155,5 @@ if __name__ == "__main__":
 	# Final evaluation 
 	evaluations.append(evaluate_policy(policy))
 	if args.save_models: policy.save("%s" % (file_name), directory="./pytorch_models")
-	np.save("./results/%s" % (file_name), evaluations)  
+	np.save("./results2/%s" % (file_name), evaluations)  
+	

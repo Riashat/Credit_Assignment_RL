@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
+import math
 
 import utils
 
@@ -59,12 +60,12 @@ class DDPG(object):
 		self.actor = Actor(state_dim, action_dim, max_action)
 		self.actor_target = Actor(state_dim, action_dim, max_action)
 		self.actor_target.load_state_dict(self.actor.state_dict())
-		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-4)
+		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-6)
 
 		self.critic = Critic(state_dim, action_dim)
 		self.critic_target = Critic(state_dim, action_dim)
 		self.critic_target.load_state_dict(self.critic.state_dict())
-		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), weight_decay=1e-2)		
+		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-6, weight_decay=1e-2)		
 
 		if torch.cuda.is_available():
 			self.actor = self.actor.cuda()
@@ -101,6 +102,7 @@ class DDPG(object):
 			# Get current Q estimate
 			current_Q = self.critic(state, action)
 
+
 			# Compute critic loss
 			critic_loss = self.criterion(current_Q, target_Q)
 
@@ -111,6 +113,7 @@ class DDPG(object):
 
 			# Compute actor loss
 			### Optimize actor by backproping through the critic
+			#actor_loss = -self.critic(state, self.actor(state) - np.max(self.actor(state).data.numpy(), axis=1)).mean()
 			actor_loss = -self.critic(state, self.actor(state)).mean()
 			
 			# Optimize the actor 
