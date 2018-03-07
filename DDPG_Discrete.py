@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import math
 
 import utils
+# from torch.distributions.distribution import Distribution
 
 
 # Implementation of Deep Deterministic Policy Gradients (DDPG)
@@ -18,6 +19,8 @@ def var(tensor, volatile=False):
 		return Variable(tensor, volatile=volatile).cuda()
 	else:
 		return Variable(tensor, volatile=volatile)
+
+
 
 
 class Actor(nn.Module):
@@ -34,9 +37,20 @@ class Actor(nn.Module):
 	def forward(self, x):
 		x = F.relu(self.l1(x))
 		x = F.relu(self.l2(x))
+		# x = self.max_action * self.logprobs_and_entropy(self.l3(x))
 		x = self.max_action * F.softmax(self.l3(x))
 		# x = self.max_action * F.tanh(self.l3(x)) 
 		return x 
+
+	def logprobs_and_entropy(self, x):
+		x = self(x)
+		log_probs = F.log_softmax(x, dim=1)
+		probs = F.softmax(x, dim=1)
+		#action_log_probs = log_probs.gather(1, actions)
+		dist_entropy = -(log_probs * probs).sum(-1).mean()
+		
+		return dist_entropy
+
 
 
 class Critic(nn.Module):
@@ -55,17 +69,19 @@ class Critic(nn.Module):
 		return x 
 
 
+
+
 class DDPG(object):
 	def __init__(self, state_dim, action_dim, max_action):
 		self.actor = Actor(state_dim, action_dim, max_action)
 		self.actor_target = Actor(state_dim, action_dim, max_action)
 		self.actor_target.load_state_dict(self.actor.state_dict())
-		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-6)
+		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-4)
 
 		self.critic = Critic(state_dim, action_dim)
 		self.critic_target = Critic(state_dim, action_dim)
 		self.critic_target.load_state_dict(self.critic.state_dict())
-		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-6, weight_decay=1e-2)		
+		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-3, weight_decay=1e-2)		
 
 		if torch.cuda.is_available():
 			self.actor = self.actor.cuda()
@@ -102,7 +118,6 @@ class DDPG(object):
 			# Get current Q estimate
 			current_Q = self.critic(state, action)
 
-
 			# Compute critic loss
 			critic_loss = self.criterion(current_Q, target_Q)
 
@@ -114,7 +129,9 @@ class DDPG(object):
 			# Compute actor loss
 			### Optimize actor by backproping through the critic
 			#actor_loss = -self.critic(state, self.actor(state) - np.max(self.actor(state).data.numpy(), axis=1)).mean()
-			actor_loss = -self.critic(state, self.actor(state)).mean()
+			### Add an entropy term here for the policy
+			### Use a decay schedule for the entropy
+			actor_loss = -self.critic(state, self.actor(state)).mean() - 0.1 * self.actor.logprobs_and_entropy(state)
 			
 			# Optimize the actor 
 			self.actor_optimizer.zero_grad()

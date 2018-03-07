@@ -31,6 +31,16 @@ def evaluate_policy(policy, eval_episodes=10):
 	return avg_reward
 
 
+def logprobs_and_entropy(self, x, actions):
+	x = self(x)
+	log_probs = F.log_softmax(x, dim=1)
+	probs = F.softmax(x, dim=1)
+	action_log_probs = log_probs.gather(1, actions)
+	dist_entropy = -(log_probs * probs).sum(-1).mean()
+	
+	return action_log_probs, dist_entropy
+
+
 if __name__ == "__main__":
 	
 	parser = argparse.ArgumentParser()
@@ -95,14 +105,12 @@ if __name__ == "__main__":
 			if total_timesteps != 0: 
 				print(("Total T: %d Episode Num: %d Episode T: %d Reward: %f") % (total_timesteps, episode_num, episode_timesteps, episode_reward))
 				policy.train(replay_buffer, episode_timesteps, args.batch_size, args.discount, args.tau)
-
-				print ("Action Probs after training")
 				action = policy.select_action(np.array(obs))
 				action_choice  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())	
 
+				### for monitoring softmax saturation
 				print ("Action Probabilities", action)
 				print ("Chosen Action", action_choice)
-
 			
 			# Evaluate episode
 			if timesteps_since_eval >= args.eval_freq:
@@ -127,10 +135,9 @@ if __name__ == "__main__":
 		# 	action = env.action_space()
 		# 	action_choice = env.action_space.sample()
 
-
 		action = policy.select_action(np.array(obs))
 		action_choice  = np.random.choice(np.arange(action.shape[0]), p=action.ravel())	
-		
+
 		"""
 		Ignorining OU Noise here - need to add this back - encourages exploration, or do epislon greedy!
 		"""
@@ -141,7 +148,6 @@ if __name__ == "__main__":
 		new_obs, reward, done, _ = env.step(action_choice) 
 		done_bool = 0 if episode_timesteps + 1 == env._max_episode_steps else float(done)
 		episode_reward += reward
-
 
 		# Store data in replay buffer
 		replay_buffer.add((obs, new_obs, action, reward, done_bool))
