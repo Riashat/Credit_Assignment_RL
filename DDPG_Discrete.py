@@ -37,7 +37,8 @@ class Actor(nn.Module):
 	def forward(self, x):
 		x = F.relu(self.l1(x))
 		x = F.relu(self.l2(x))
-		# x = self.max_action * self.logprobs_and_entropy(self.l3(x))
+		import pdb; pdb.set_trace()		
+
 		x = self.max_action * F.softmax(self.l3(x))
 		# x = self.max_action * F.tanh(self.l3(x)) 
 		return x 
@@ -46,7 +47,6 @@ class Actor(nn.Module):
 		x = self(x)
 		log_probs = F.log_softmax(x, dim=1)
 		probs = F.softmax(x, dim=1)
-		#action_log_probs = log_probs.gather(1, actions)
 		dist_entropy = -(log_probs * probs).sum(-1).mean()
 		
 		return dist_entropy
@@ -98,7 +98,7 @@ class DDPG(object):
 		return self.actor(state).cpu().data.numpy().flatten()
 
 
-	def train(self, replay_buffer, iterations, batch_size=64, discount=0.99, tau=0.001):
+	def train(self, replay_buffer, iterations, batch_size=64, discount=0.99, tau=0.001, lambda_actor = 0.1):
 
 		for it in range(iterations):
 
@@ -131,7 +131,15 @@ class DDPG(object):
 			#actor_loss = -self.critic(state, self.actor(state) - np.max(self.actor(state).data.numpy(), axis=1)).mean()
 			### Add an entropy term here for the policy
 			### Use a decay schedule for the entropy
-			actor_loss = -self.critic(state, self.actor(state)).mean() - 0.1 * self.actor.logprobs_and_entropy(state)
+			target_actor = self.actor_target(state)
+			target_actor = Variable(target_actor.data)
+			target_actor.volatile = False
+			current_actor = self.actor(state)
+
+			actor_regularizer = self.criterion(current_actor, target_actor)
+			actor_original_loss = -self.critic(state, self.actor(state)).mean()			
+
+			actor_loss = actor_original_loss - 0.1 * self.actor.logprobs_and_entropy(state) + lambda_actor * actor_regularizer
 			
 			# Optimize the actor 
 			self.actor_optimizer.zero_grad()
