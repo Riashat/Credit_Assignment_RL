@@ -43,8 +43,8 @@ class FFPolicy_discrete(nn.Module):
         raise NotImplementedError
 
     def act(self, inputs, states, masks, deterministic=False):
-        x, states = self(inputs, states, masks)
-        probs = F.softmax(x)
+        x, pre_softmax = self(inputs, states, masks)
+        probs = F.softmax(pre_softmax)
         if deterministic is False:
             action = probs.multinomial()
         else:
@@ -54,10 +54,10 @@ class FFPolicy_discrete(nn.Module):
         return action, probs, states
 
     def evaluate_actions(self, inputs, states, masks, actions):
-        x, states = self(inputs, states, masks)
+        x, pre_softmax = self(inputs, states, masks)
         #action_log_probs, dist_entropy = self.dist.logprobs_and_entropy(x, actions)
-        log_probs = F.log_softmax(x)
-        probs = F.softmax(x)
+        log_probs = F.log_softmax(pre_softmax)
+        probs = F.softmax(pre_softmax)
         action_log_probs = log_probs.gather(1, actions)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
         return action_log_probs, probs, dist_entropy, states
@@ -152,7 +152,8 @@ class Actor(FFPolicy_discrete):
         x = F.relu(x)
 
         x = self.linear2(x)
-        #x = F.softmax(x)
+        pre_softmax=x
+        x = F.softmax(x)
 
         #if hasattr(self, 'gru'):
         #    if inputs.size(0) == states.size(0):
@@ -166,7 +167,7 @@ class Actor(FFPolicy_discrete):
         #            outputs.append(hx)
         #        x = torch.cat(outputs, 0)
 
-        return x, states
+        return x, pre_softmax
 
 class CNNPolicy(FFPolicy):
     def __init__(self, num_inputs, action_space, use_gru):

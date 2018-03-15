@@ -20,8 +20,11 @@ from kfac import KFACOptimizer
 from model import CNNPolicy, MLPPolicy, Critic, Actor
 from storage import RolloutStorage
 from visualize import visdom_plot
+from replay_buffer import ReplayBuffer
 
 args = get_args()
+criterion = nn.MSELoss()
+
 
 assert args.algo in ['a2c', 'ppo', 'acktr']
 if args.recurrent_policy:
@@ -29,6 +32,16 @@ if args.recurrent_policy:
         'Recurrent policy is not implemented for ACKTR'
 
 num_updates = int(args.num_frames) // args.num_steps // args.num_processes
+USE_CUDA = torch.cuda.is_available()
+FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
+
+def soft_update(target, source, tau):
+    for target_param, param in zip(target.parameters(), source.parameters()):
+        target_param.data.copy_(
+            target_param.data * (1.0 - tau) + param.data * tau
+        )
+
+
 
 torch.manual_seed(args.seed)
 if args.cuda:
@@ -44,6 +57,12 @@ except OSError:
 def hard_update(target, source):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(param.data)
+
+def to_tensor(ndarray, volatile=False, requires_grad=False, dtype=FLOAT):
+    return Variable(
+        torch.from_numpy(ndarray), volatile=volatile, requires_grad=requires_grad
+    ).type(dtype)
+
 
 def main():
     print("#######")
@@ -91,13 +110,18 @@ def main():
     if args.cuda:
         actor_critic.cuda()
         critic.cuda()
+        critic_target.cuda()
+        target_actor.cuda()
 
     if args.algo == 'a2c':
         optimizer = optim.RMSprop(actor_critic.parameters(), args.lr, eps=args.eps, alpha=args.alpha)
-        critic_optim = optim.Adam(critic.parameters(), lr=1e-3)
+        critic_optim = optim.Adam(critic.parameters(), lr=1e-4)
         gamma = 0.99
         tau = 0.001
 
+
+    #memory = SequentialMemory(limit=args.rmsize, window_length=args.window_length)
+    mem_buffer = ReplayBuffer()
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes, obs_shape, envs.action_space, actor_critic.state_size, envs.action_space.n)
     current_obs = torch.zeros(args.num_processes, *obs_shape)
@@ -152,7 +176,9 @@ def main():
             else:
                 current_obs *= masks
 
+            pre_state= rollouts.observations[step].cpu().numpy()
             update_current_obs(obs)
+            mem_buffer.add((pre_state, current_obs, action_log_prob.data.cpu().numpy(), reward, done))
             rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, value.data, reward, masks)
 
         action, action_log_prob, states  = actor_critic.act(Variable(rollouts.observations[-1], volatile=True),
@@ -164,6 +190,30 @@ def main():
 
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
+        if True:
+            state, next_state, action, reward, done = mem_buffer.sample(5)
+            next_state = next_state.reshape([-1, *obs_shape])
+            state = state.reshape([-1, *obs_shape])
+            action = action.reshape([-1, 6])
+            next_q_values = critic_target(to_tensor(next_state, volatile=True),target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))[0])
+            next_q_values.volatile=False
+            target_q_batch = to_tensor(reward) + args.gamma*to_tensor(done.astype(np.float))*next_q_values
+            critic.zero_grad()
+            q_batch = critic(to_tensor(state), to_tensor(action))
+            value_loss = criterion(q_batch, target_q_batch)
+            value_loss.backward()
+            critic_optim.step()
+            actor_critic.zero_grad()
+            policy_loss = -critic(to_tensor(state),actor_critic(to_tensor(state), to_tensor(state), to_tensor(state))[0])
+            policy_loss = policy_loss.mean()
+            policy_loss.backward()
+            if args.algo == 'a2c':
+                nn.utils.clip_grad_norm(actor_critic.parameters(), args.max_grad_norm)
+            optimizer.step()
+            soft_update(target_actor, actor_critic, tau)
+            soft_update(critic_target, critic, tau)
+
+        '''
         if args.algo in ['a2c', 'acktr']:
             action_log_probs, probs, dist_entropy, states = actor_critic.evaluate_actions(Variable(rollouts.observations[:-1].view(-1, *obs_shape)),
                                                                                            Variable(rollouts.states[0].view(-1, actor_critic.state_size)),
@@ -191,7 +241,7 @@ def main():
 
             optimizer.step()
             critic_optim.step()
-
+        '''
         rollouts.after_update()
 
         if j % args.save_interval == 0 and args.save_dir != "":
@@ -214,14 +264,14 @@ def main():
         if j % args.log_interval == 0:
             end = time.time()
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
-            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, entropy {:.5f}, value loss {:.5f}, policy loss {:.5f}".
+            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}".
                 format(j, total_num_steps,
                        int(total_num_steps / (end - start)),
                        final_rewards.mean(),
                        final_rewards.median(),
                        final_rewards.min(),
-                       final_rewards.max(), dist_entropy.data[0],
-                       value_loss, action_loss.data[0]))
+                       final_rewards.max(),
+                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0]))
         if args.vis and j % args.vis_interval == 0:
             try:
                 # Sometimes monitor doesn't properly flush the outputs
