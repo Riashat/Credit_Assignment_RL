@@ -22,26 +22,22 @@ from storage import RolloutStorage
 from visualize import visdom_plot
 from replay_buffer import ReplayBuffer
 
+from utils import Logger
+
 args = get_args()
 criterion = nn.MSELoss()
 
-
-assert args.algo in ['a2c', 'ppo', 'acktr']
-if args.recurrent_policy:
-    assert args.algo in ['a2c', 'ppo'], \
-        'Recurrent policy is not implemented for ACKTR'
-
 num_updates = int(args.num_frames) // args.num_steps // args.num_processes
+
 USE_CUDA = torch.cuda.is_available()
 FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 
+# soft update after the actor and critic updates
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(
             target_param.data * (1.0 - tau) + param.data * tau
         )
-
-
 
 torch.manual_seed(args.seed)
 if args.cuda:
@@ -71,6 +67,14 @@ def main():
 
     os.environ['OMP_NUM_THREADS'] = '1'
 
+    logger = Logger(environment_name = args.env_name,folder = args.folder)
+    logger.save_args(args)
+
+    print ("---------------------------------------")
+    print ('Saving to', logger.save_folder)
+    print ("---------------------------------------")    
+
+
     if args.vis:
         from visdom import Visdom
         viz = Visdom()
@@ -79,51 +83,44 @@ def main():
     envs = [make_env(args.env_name, args.seed, i, args.log_dir)
                 for i in range(args.num_processes)]
 
+    ### for the number of processes to use
     if args.num_processes > 1:
         envs = SubprocVecEnv(envs)
     else:
         envs = DummyVecEnv(envs)
-
     if len(envs.observation_space.shape) == 1:
         envs = VecNormalize(envs)
+
 
     obs_shape = envs.observation_space.shape
     obs_shape = (obs_shape[0] * args.num_stack, *obs_shape[1:])
 
+    ## ALE Environments : mostly has Discrete action_space type
     if envs.action_space.__class__.__name__ == "Discrete":
         action_shape = 1
     else:
         action_shape = envs.action_space.shape[0]
 
-
+    ### shape==3 for ALE Environments : States are 3D (Image Pi)
     if len(envs.observation_space.shape) == 3:
-        actor_critic = Actor(obs_shape[0], envs.action_space, args.recurrent_policy,  envs.action_space.n)
+        actor = Actor(obs_shape[0], envs.action_space, args.recurrent_policy,  envs.action_space.n)
         target_actor = Actor(obs_shape[0], envs.action_space, args.recurrent_policy, envs.action_space.n)
         critic = Critic(in_channels=4, num_actions=envs.action_space.n)
         critic_target = Critic(in_channels=4, num_actions=envs.action_space.n)
-    else:
-        assert not args.recurrent_policy, \
-            "Recurrent policy is not implemented for the MLP controller"
-        actor_critic = MLPPolicy(obs_shape[0], envs.action_space)
 
 
     if args.cuda:
-        actor_critic.cuda()
+        actor.cuda()
         critic.cuda()
         critic_target.cuda()
         target_actor.cuda()
 
-    if args.algo == 'a2c':
-        optimizer = optim.RMSprop(actor_critic.parameters(), args.lr, eps=args.eps, alpha=args.alpha)
-        critic_optim = optim.Adam(critic.parameters(), lr=1e-4)
-        gamma = 0.99
-        tau = 0.001
+    actor_optim = optim.Adam(actor.parameters(), lr=1e-4)    
+    critic_optim = optim.Adam(critic.parameters(), lr=1e-3)
+    tau_soft_update = 0.001
 
-
-    #memory = SequentialMemory(limit=args.rmsize, window_length=args.window_length)
     mem_buffer = ReplayBuffer()
-
-    rollouts = RolloutStorage(args.num_steps, args.num_processes, obs_shape, envs.action_space, actor_critic.state_size, envs.action_space.n)
+    rollouts = RolloutStorage(args.num_steps, args.num_processes, obs_shape, envs.action_space, actor.state_size, envs.action_space.n)
     current_obs = torch.zeros(args.num_processes, *obs_shape)
 
     def update_current_obs(obs):
@@ -146,14 +143,17 @@ def main():
         current_obs = current_obs.cuda()
         rollouts.cuda()
 
-
     start = time.time()
     for j in range(num_updates):
+
+        ## num_steps = 5 as in A2C
         for step in range(args.num_steps):
+
             # Sample actions
-            action, action_log_prob, states = actor_critic.act(Variable(rollouts.observations[step], volatile=True),
+            action, action_log_prob, states = actor.act(Variable(rollouts.observations[step], volatile=True),
                                                                       Variable(rollouts.states[step], volatile=True),
                                                                       Variable(rollouts.masks[step], volatile=True))
+
             value = critic.forward(Variable(rollouts.observations[step], volatile=True), action_log_prob)
             cpu_actions = action.data.squeeze(1).cpu().numpy()
 
@@ -181,7 +181,7 @@ def main():
             mem_buffer.add((pre_state, current_obs, action_log_prob.data.cpu().numpy(), reward, done))
             rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, value.data, reward, masks)
 
-        action, action_log_prob, states  = actor_critic.act(Variable(rollouts.observations[-1], volatile=True),
+        action, action_log_prob, states  = actor.act(Variable(rollouts.observations[-1], volatile=True),
                                             Variable(rollouts.states[-1], volatile=True),
                                             Variable(rollouts.masks[-1], volatile=True))#[0].data
 
@@ -191,57 +191,41 @@ def main():
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
         if True:
-            state, next_state, action, reward, done = mem_buffer.sample(5)
+            ##samples from the replay buffer
+            state, next_state, action, reward, done = mem_buffer.sample(args.batch_size)
             next_state = next_state.reshape([-1, *obs_shape])
             state = state.reshape([-1, *obs_shape])
             action = action.reshape([-1, 6])
+
+            #current Q estimate
+            q_batch = critic(to_tensor(state), to_tensor(action))
+
+            """
+            Need to compute k-step returns here for the Q target
+            """
+            # target Q estimate
             next_q_values = critic_target(to_tensor(next_state, volatile=True),target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))[0])
             next_q_values.volatile=False
             target_q_batch = to_tensor(reward) + args.gamma*to_tensor(done.astype(np.float))*next_q_values
+
+
+            #Critic loss estimate and update
             critic.zero_grad()
-            q_batch = critic(to_tensor(state), to_tensor(action))
             value_loss = criterion(q_batch, target_q_batch)
             value_loss.backward()
             critic_optim.step()
-            actor_critic.zero_grad()
-            policy_loss = -critic(to_tensor(state),actor_critic(to_tensor(state), to_tensor(state), to_tensor(state))[0])
+
+            #evaluating actor_loss : - Q(s, \mu(s))
+            actor.zero_grad()
+            policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
             policy_loss = policy_loss.mean()
             policy_loss.backward()
-            if args.algo == 'a2c':
-                nn.utils.clip_grad_norm(actor_critic.parameters(), args.max_grad_norm)
-            optimizer.step()
-            soft_update(target_actor, actor_critic, tau)
-            soft_update(critic_target, critic, tau)
-
-        '''
-        if args.algo in ['a2c', 'acktr']:
-            action_log_probs, probs, dist_entropy, states = actor_critic.evaluate_actions(Variable(rollouts.observations[:-1].view(-1, *obs_shape)),
-                                                                                           Variable(rollouts.states[0].view(-1, actor_critic.state_size)),
-                                                                                           Variable(rollouts.masks[:-1].view(-1, 1)),
-                                                                                           Variable(rollouts.actions.view(-1, action_shape)))
-            values = critic.forward(Variable(rollouts.observations[:-1].view(-1, *obs_shape)), probs).data
-
-            values = values.view(args.num_steps, args.num_processes, 1)
-            action_log_probs = action_log_probs.view(args.num_steps, args.num_processes, 1)
-
-            #advantages = Variable(rollouts.returns[:-1]) - values
-            advantages = rollouts.returns[:-1] - values
-            value_loss = advantages.pow(2).mean()
-
-            action_loss = -(Variable(advantages) * action_log_probs).mean()
-            #action_loss = -(Variable(advantages.data) * action_log_probs).mean()
+            actor_optim.step()
 
 
-            optimizer.zero_grad()
-            critic_optim.zero_grad()
-            (value_loss * args.value_loss_coef + action_loss - dist_entropy * args.entropy_coef).backward()
+            soft_update(target_actor, actor, tau_soft_update)
+            soft_update(critic_target, critic, tau_soft_update)
 
-            if args.algo == 'a2c':
-                nn.utils.clip_grad_norm(actor_critic.parameters(), args.max_grad_norm)
-
-            optimizer.step()
-            critic_optim.step()
-        '''
         rollouts.after_update()
 
         if j % args.save_interval == 0 and args.save_dir != "":
@@ -252,9 +236,9 @@ def main():
                 pass
 
             # A really ugly way to save a model to CPU
-            save_model = actor_critic
+            save_model = actor
             if args.cuda:
-                save_model = copy.deepcopy(actor_critic).cpu()
+                save_model = copy.deepcopy(actor).cpu()
 
             save_model = [save_model,
                             hasattr(envs, 'ob_rms') and envs.ob_rms or None]
@@ -272,6 +256,19 @@ def main():
                        final_rewards.min(),
                        final_rewards.max(),
                        value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0]))
+
+            final_rewards_mean = [final_rewards.mean()]
+            final_rewards_median = [final_rewards.median()]
+            final_rewards_min = [final_rewards.min()]
+            final_rewards_max = [final_rewards.max()]
+
+            all_value_loss = [value_loss.data.cpu().numpy()[0]]
+            all_policy_loss = [policy_loss.data.cpu().numpy()[0]]
+
+            logger.record_data(final_rewards_mean, final_rewards_median, final_rewards_min, final_rewards_max, all_value_loss, all_policy_loss)
+            logger.save()
+
+
         if args.vis and j % args.vis_interval == 0:
             try:
                 # Sometimes monitor doesn't properly flush the outputs

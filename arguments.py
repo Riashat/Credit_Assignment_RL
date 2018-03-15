@@ -5,8 +5,8 @@ import torch
 
 def get_args():
     parser = argparse.ArgumentParser(description='RL')
-    parser.add_argument('--algo', default='a2c',
-                        help='algorithm to use: a2c | ppo | acktr')
+    parser.add_argument('--algo', default='ddpg',
+                        help='algorithm to use: ddpg | a2c | ppo | acktr')
     parser.add_argument('--lr', type=float, default=7e-4,
                         help='learning rate (default: 7e-4)')
     parser.add_argument('--eps', type=float, default=1e-5,
@@ -33,7 +33,7 @@ def get_args():
                         help='number of forward steps in A2C (default: 5)')
     parser.add_argument('--ppo-epoch', type=int, default=4,
                         help='number of ppo epochs (default: 4)')
-    parser.add_argument('--num-mini-batch', type=int, default=32,
+    parser.add_argument('--batch_size', type=int, default=32,
                         help='number of batches for ppo (default: 32)')
     parser.add_argument('--clip-param', type=float, default=0.2,
                         help='ppo clip parameter (default: 0.2)')
@@ -61,6 +61,8 @@ def get_args():
                         help='disables visdom visualization')
     parser.add_argument('--rmsize', default=6000000, type=int, help='memory size')
     parser.add_argument('--window_length', default=1, type=int, help='')
+    parser.add_argument('-f', '--folder', type=str, default='./results')
+
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()

@@ -90,6 +90,8 @@ class Critic(nn.Module):
         x = F.relu(self.fc6( torch.cat((x, action_emb), dim=1)))
         return self.fc7(x)
 
+
+
 class Actor(FFPolicy_discrete):
     def __init__(self, num_inputs, action_space, use_gru, action_dim):
         super(Actor, self).__init__()
