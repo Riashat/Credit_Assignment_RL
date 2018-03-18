@@ -17,7 +17,8 @@ from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from envs import make_env
 from kfac import KFACOptimizer
-from model import CNNPolicy, MLPPolicy, Critic, Actor
+from model import Critic, Actor
+#from model import CNNPolicy, MLPPolicy, Critic, Actor
 from storage import RolloutStorage
 from visualize import visdom_plot
 from replay_buffer import ReplayBuffer
@@ -25,6 +26,7 @@ from replay_buffer import ReplayBuffer
 from utils import Logger
 
 args = get_args()
+assert args.algo in ["a2c"]
 criterion = nn.MSELoss()
 
 num_updates = int(args.num_frames) // args.num_steps // args.num_processes
@@ -36,7 +38,7 @@ FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(
-            target_param.data * (1.0 - tau) + param.data * tau
+            target_param.data * (1.0 - tau) + param.data * tau 
         )
 
 torch.manual_seed(args.seed)
@@ -75,6 +77,7 @@ def main():
     print ("---------------------------------------")    
 
 
+
     if args.vis:
         from visdom import Visdom
         viz = Visdom()
@@ -90,7 +93,6 @@ def main():
         envs = DummyVecEnv(envs)
     if len(envs.observation_space.shape) == 1:
         envs = VecNormalize(envs)
-
 
     obs_shape = envs.observation_space.shape
     obs_shape = (obs_shape[0] * args.num_stack, *obs_shape[1:])
@@ -150,7 +152,7 @@ def main():
         for step in range(args.num_steps):
 
             # Sample actions
-            action, action_log_prob, states = actor.act(Variable(rollouts.observations[step], volatile=True),
+            action, action_log_prob, states, dist_entropy = actor.act(Variable(rollouts.observations[step], volatile=True),
                                                                       Variable(rollouts.states[step], volatile=True),
                                                                       Variable(rollouts.masks[step], volatile=True))
 
@@ -178,24 +180,38 @@ def main():
 
             pre_state= rollouts.observations[step].cpu().numpy()
             update_current_obs(obs)
-            mem_buffer.add((pre_state, current_obs, action_log_prob.data.cpu().numpy(), reward, done))
-            rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, value.data, reward, masks)
+           
+            # mem_buffer.add((pre_state, current_obs, action_log_prob.data.cpu().numpy(), reward, done))
+            rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, dist_entropy.data,  value.data, reward, masks)
 
-        action, action_log_prob, states  = actor.act(Variable(rollouts.observations[-1], volatile=True),
+
+        nth_step_return = rollouts.returns[0].cpu().numpy()
+        current_state = rollouts.observations[0].cpu().numpy()
+        nth_state = rollouts.observations[-1].cpu().numpy()
+        current_action = rollouts.action_log_probs[0].cpu().numpy()
+        current_action_dist_entropy = rollouts.dist_entropy[0].cpu().numpy()
+
+        ##TODO : rollouts.dist_entropy size (6 instead of 5)
+        
+        mem_buffer.add( (current_state, nth_state, current_action, nth_step_return, done, current_action_dist_entropy) )
+        action, action_log_prob, states, dist_entropy = actor.act(Variable(rollouts.observations[-1], volatile=True),
                                             Variable(rollouts.states[-1], volatile=True),
                                             Variable(rollouts.masks[-1], volatile=True))#[0].data
 
         next_value = critic.forward(Variable(rollouts.observations[-1], volatile=True), action_log_prob).data
 
-
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
-        if True:
+        # import pdb; pdb.set_trace()
+        bs_size = 64
+        if len(mem_buffer.storage) >= bs_size :
+        #if True:
             ##samples from the replay buffer
-            state, next_state, action, reward, done = mem_buffer.sample(args.batch_size)
+            state, next_state, action, returns, done, entropy_log_prob = mem_buffer.sample(bs_size)
+
             next_state = next_state.reshape([-1, *obs_shape])
             state = state.reshape([-1, *obs_shape])
-            action = action.reshape([-1, 6])
+            action = action.reshape([-1, envs.action_space.n])
 
             #current Q estimate
             q_batch = critic(to_tensor(state), to_tensor(action))
@@ -206,9 +222,10 @@ def main():
             # target Q estimate
             next_q_values = critic_target(to_tensor(next_state, volatile=True),target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))[0])
             next_q_values.volatile=False
-            target_q_batch = to_tensor(reward) + args.gamma*to_tensor(done.astype(np.float))*next_q_values
+            #target_q_batch = to_tensor(reward) + args.gamma*to_tensor(done.astype(np.float))*next_q_values
+            target_q_batch = to_tensor(returns) + args.gamma * to_tensor(done.astype(np.float))*next_q_values
 
-
+            ## Alternative way : implement the advantage function with k-step returns
             #Critic loss estimate and update
             critic.zero_grad()
             value_loss = criterion(q_batch, target_q_batch)
@@ -218,17 +235,22 @@ def main():
             #evaluating actor_loss : - Q(s, \mu(s))
             actor.zero_grad()
             policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
-            policy_loss = policy_loss.mean()
-            policy_loss.backward()
+
+            # import pdb; pdb.set_trace()
+
+            policy_loss = policy_loss.mean() - 1 * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
+            policy_loss.backward() 
+            nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
             actor_optim.step()
 
 
             soft_update(target_actor, actor, tau_soft_update)
             soft_update(critic_target, critic, tau_soft_update)
 
+
         rollouts.after_update()
 
-        if j % args.save_interval == 0 and args.save_dir != "":
+        if j % args.save_interval == 0 and args.save_dir != "" and len(mem_buffer.storage) >= bs_size:
             save_path = os.path.join(args.save_dir, args.algo)
             try:
                 os.makedirs(save_path)
@@ -245,17 +267,17 @@ def main():
 
             torch.save(save_model, os.path.join(save_path, args.env_name + ".pt"))
 
-        if j % args.log_interval == 0:
+        if j % args.log_interval == 0 and len(mem_buffer.storage) >= bs_size:
             end = time.time()
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
-            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}".
+            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}, Entropy {:.5f}".
                 format(j, total_num_steps,
                        int(total_num_steps / (end - start)),
                        final_rewards.mean(),
                        final_rewards.median(),
                        final_rewards.min(),
                        final_rewards.max(),
-                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0]))
+                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0], entropy_log_prob.mean()))
 
             final_rewards_mean = [final_rewards.mean()]
             final_rewards_median = [final_rewards.median()]
@@ -269,7 +291,9 @@ def main():
             logger.save()
 
 
+        
         if args.vis and j % args.vis_interval == 0:
+
             try:
                 # Sometimes monitor doesn't properly flush the outputs
                 win = visdom_plot(viz, win, args.log_dir, args.env_name, args.algo)
