@@ -53,7 +53,7 @@ class FFPolicy_discrete(nn.Module):
         log_probs = F.log_softmax(x)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
 
-        
+
         return action, probs, states, dist_entropy
 
 
@@ -94,6 +94,33 @@ class Critic(nn.Module):
         x = F.relu(self.fc6( torch.cat((x, action_emb), dim=1)))
         return self.fc7(x)
 
+
+class Baseline_Critic(nn.Module):
+    def __init__(self, in_channels=4, num_actions=18):
+        """
+        Arguments:
+            in_channels: number of channel of input.
+                i.e The number of most recent frames stacked together as describe in the paper
+            num_actions: number of action-value to output, one-to-one correspondence to action in game.
+        """
+        super(Baseline_Critic, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+
+        self.fc4 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_action = nn.Linear(num_actions, 256)
+        self.fc6 = nn.Linear(512 + 256 , 256)
+        self.fc7 = nn.Linear(256 , 1)
+
+    def forward(self, x, action):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        action_emb =  F.relu(self.fc_action(action))
+        x = F.relu(self.fc4(x.view(x.size(0), -1)))
+        x = F.relu(self.fc6( torch.cat((x, action_emb), dim=1)))
+        return self.fc7(x)
 
 
 class Actor(FFPolicy_discrete):

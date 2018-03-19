@@ -17,7 +17,7 @@ from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from envs import make_env
 from kfac import KFACOptimizer
-from model import Critic, Actor
+from model import Critic, Actor, Baseline_Critic
 #from model import CNNPolicy, MLPPolicy, Critic, Actor
 from storage import RolloutStorage
 from visualize import visdom_plot
@@ -109,6 +109,7 @@ def main():
         target_actor = Actor(obs_shape[0], envs.action_space, args.recurrent_policy, envs.action_space.n)
         critic = Critic(in_channels=4, num_actions=envs.action_space.n)
         critic_target = Critic(in_channels=4, num_actions=envs.action_space.n)
+        baseline_target = Baseline_Critic(in_channels=4, num_actions=envs.action_space.n)
 
 
     if args.cuda:
@@ -116,9 +117,11 @@ def main():
         critic.cuda()
         critic_target.cuda()
         target_actor.cuda()
+        baseline_target.cuda()
 
     actor_optim = optim.Adam(actor.parameters(), lr=1e-4)    
     critic_optim = optim.Adam(critic.parameters(), lr=1e-3)
+    baseline_optim = optim.Adam(critic.parameters(), lr=1e-3)
     tau_soft_update = 0.001
 
     mem_buffer = ReplayBuffer()
@@ -157,6 +160,7 @@ def main():
                                                                       Variable(rollouts.masks[step], volatile=True))
 
             value = critic.forward(Variable(rollouts.observations[step], volatile=True), action_log_prob)
+
             cpu_actions = action.data.squeeze(1).cpu().numpy()
 
             # Obser reward and next obs
@@ -202,7 +206,7 @@ def main():
 
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
-        # import pdb; pdb.set_trace()
+
         bs_size = 64
         if len(mem_buffer.storage) >= bs_size :
         #if True:
@@ -216,16 +220,11 @@ def main():
             #current Q estimate
             q_batch = critic(to_tensor(state), to_tensor(action))
 
-            """
-            Need to compute k-step returns here for the Q target
-            """
             # target Q estimate
             next_q_values = critic_target(to_tensor(next_state, volatile=True),target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))[0])
             next_q_values.volatile=False
-            #target_q_batch = to_tensor(reward) + args.gamma*to_tensor(done.astype(np.float))*next_q_values
             target_q_batch = to_tensor(returns) + args.gamma * to_tensor(done.astype(np.float))*next_q_values
 
-            ## Alternative way : implement the advantage function with k-step returns
             #Critic loss estimate and update
             critic.zero_grad()
             value_loss = criterion(q_batch, target_q_batch)
@@ -236,12 +235,59 @@ def main():
             actor.zero_grad()
             policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
 
-            # import pdb; pdb.set_trace()
 
-            policy_loss = policy_loss.mean() - 1 * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
+            policy_loss = policy_loss.mean() - 0.01 * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
+            
+            #g
+            grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
+
             policy_loss.backward() 
-            nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
+            #nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
             actor_optim.step()
+
+
+
+
+
+            """
+            Training the Baseline critic (Q(s,a))
+            """
+            baseline_target.zero_grad()
+            #trade-off between two constraints when training baseline
+            lambda_baseline = 0.1
+
+            ## f(s,a)
+            current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
+            #current_baseline.volatile=False
+
+             
+            ## \grad f(s,a)
+            grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True)
+
+
+            ## MSE : (Q - f)^{2}
+            baseline_loss = (q_batch.detach() - current_baseline).pow(2)
+            #baseline_loss.mean().backward()
+
+
+            actor.zero_grad()
+            baseline_target.zero_grad()
+            grad_norm = 0
+
+            for grad_1, grad_2 in zip(grad_params, grad_baseline_params):
+                grad_norm += grad_1.pow(2).sum() - grad_2.pow(2).sum()
+            grad_norm = grad_norm.sqrt()
+                
+
+            import pdb; pdb.set_trace() 
+
+            ### compute overall loss: baseline_loss + lambda * grad_norm
+            ### when do .backward() on overall loss, do not backprop through grad_params (or g)
+            ### do an update step
+
+
+
+
 
 
             soft_update(target_actor, actor, tau_soft_update)
