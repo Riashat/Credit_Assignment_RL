@@ -58,7 +58,7 @@ def orthogonal(tensor, gain=1):
 
 create_folder = lambda f: [ os.makedirs(f) if not os.path.exists(f) else False ]
 class Logger(object):
-      def __init__(self, environment_name='', folder='./results' ):
+      def __init__(self, environment_name='', entropy_coff=  '',  folder='./results' ):
             """
             Saves experimental metrics for use later.
             :param experiment_name: name of the experiment
@@ -73,7 +73,7 @@ class Logger(object):
             self.all_value_loss = []
             self.all_policy_loss = []
 
-            self.save_folder = os.path.join(folder, environment_name, time.strftime('%y-%m-%d-%H-%M-%s'))
+            self.save_folder = os.path.join(folder, environment_name, entropy_coff, time.strftime('%y-%m-%d-%H-%M-%s'))
             create_folder(self.save_folder)
 
 

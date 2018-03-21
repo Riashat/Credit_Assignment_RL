@@ -1,4 +1,3 @@
-
 import os
 import itertools
 import numpy as np
@@ -19,23 +18,20 @@ def grid_search(args_vals):
 
 
 parser = argparse.ArgumentParser()
+
 parser.add_argument('--experiments', type=int, default=5)
-parser.add_argument('--policy', type=str, default="Trust_DDPG")          # Policy name
-parser.add_argument('--env', type=str, default="HalfCheetah-v1")         # OpenAI gym environment name
-parser.add_argument('--seed', default=0, type=int)                  # Sets Gym, PyTorch and Numpy seeds
-parser.add_argument('--start_timesteps', default=10000, type=int)     # How many time steps purely random policy is run for
-parser.add_argument('--eval_freq', default=5e3, type=float)         # How often (time steps) we evaluate
-parser.add_argument('--max_timesteps', default=1e6, type=float)     # Max time steps to run environment for
-parser.add_argument('--save_models', default=True,type=bool)           # Whether or not models are saved
-parser.add_argument('--expl_noise', default=0.1, type=float)        # Std of Gaussian exploration noise
-parser.add_argument('--batch_size', default=100, type=int)          # Batch size for both actor and critic
-parser.add_argument('--discount', default=0.99, type=float)         # Discount factor
-parser.add_argument('--tau', default=0.005, type=float)             # Target network update rate
-parser.add_argument('--policy_noise', default=0.2, type=float)      # Noise added to target policy during critic update
-parser.add_argument('--noise_clip', default=0.5, type=float)        # Range to clip target policy noise
-parser.add_argument('--policy_freq', default=2, type=int)           # Frequency of delayed policy updates
-parser.add_argument('--lambda_critic', default = 0.1, type=float)   # Lambda trade-off for critic regularizer
-parser.add_argument('--lambda_actor', default = 0.1, type=float)    # Lambda trade-off for actor regularizer
+parser.add_argument('--policy', type=str, default="a2c")
+parser.add_argument('--lr', type=float, default=7e-4, help="learning rate")
+parser.add_argument('--eps', type=float, default=1e-5, help='RMSprop optimizer epsilon (default: 1e-5)')
+parser.add_argument('--alpha', type=float, default=0.99, help='RMSprop optimizer apha (default: 0.99)')
+parser.add_argument('--use-gae', action='store_true', default=False, help='use generalized advantage estimation')
+parser.add_argument('--tau', type=float, default=0.95, help='gae parameter (default: 0.95)')
+parser.add_argument('--entropy_coef', type=float, default=0.01, help='entropy term coefficient (default: 0.01)')
+parser.add_argument('--max-grad-norm', type=float, default=0.5, help='max norm of gradients (default: 0.5)')
+parser.add_argument('--seed', type=int, default=1, help='random seed (default: 1)')
+parser.add_argument('--num-processes', type=int, default=16, help='how many training CPU processes to use (default: 16)')
+parser.add_argument('--num-steps', type=int, default=5, help='number of forward steps in A2C (default: 5)')
+parser.add_argument('--env_name', default='PongNoFrameskip-v4', help='environment to train on (default: PongNoFrameskip-v4)')
 parser.add_argument('-g',  type=str, default='0', help=['specify GPU'])
 parser.add_argument('-f', type=str, default="./results/")          # Folder to save results in
 
@@ -52,49 +48,28 @@ args = parser.parse_args()
 # os.environ["CUDA_VISIBLE_DEVICES"] = args.g
 
 experiments = args.experiments
-policy_name = args.policy
-env_name = args.env
+env_name = args.env_name
 seed = args.seed
-#import pdb;pdb.set_trace()
-start_timesteps = args.start_timesteps
-eval_freq = args.eval_freq
-max_timesteps = args.max_timesteps
-expl_noise = args.expl_noise
-batch_size = args.batch_size
-discount = args.discount
-tau = args.tau
-policy_noise = args.policy_noise
-noise_clip = args.noise_clip
-policy_freq = args.policy_freq
-lambda_critic = args.lambda_critic
-lambda_actor = args.lambda_actor
+learning_rate = args.lr
+
+entropy_coef = args.entropy_coef
+
+
 folder = args.f
-#save_models=args.save_models
+
+
+learning_rate_search = [0.4]
+entropy_coef = [0.01, 0.03, 0.05]
 
 
 grid = [] 
-grid += [['-policy_name', [[policy_name]]]]
 grid += [['-env_name', [env_name]]]
 grid += [['-seed', [seed]]]
-grid += [['-start_timesteps', [start_timesteps]]]
-grid += [['-eval_freq', [eval_freq]]]
-grid += [['-max_timesteps', [max_timesteps]]]
-grid += [['-save_models',[args.save_models]]]
-grid += [['-expl_noise', [expl_noise]]]
-grid += [['-batch_size', [batch_size]]]
-grid += [['-batch_size', [batch_size]]]
-grid += [['-tau', [tau]]]
-grid += [['-policy_noise', [policy_noise]]]
-grid += [['-noise_clip', [noise_clip]]]
-grid += [['-policy_freq', [policy_freq]]]
-grid += [['-lambda_critic', [lambda_critic]]]
-grid += [['-lambda_actor', [lambda_actor]]]
+grid += [['-lr', learning_rate_search]]
+grid += [['-entropy_coef', entropy_coef]]
+
 grid += [['-f', [folder]]]
-
 #grid += [['-gpu', [gpu]]]
-
-
-
 
 job_strs = []
 for settings in grid_search(grid):
@@ -104,4 +79,4 @@ for settings in grid_search(grid):
 print("njobs", len(job_strs))
 
 for job_str in job_strs:
-os.system(job_str)
+    os.system(job_str)

@@ -69,7 +69,7 @@ def main():
 
     os.environ['OMP_NUM_THREADS'] = '1'
 
-    logger = Logger(environment_name = args.env_name,folder = args.folder)
+    logger = Logger(environment_name = args.env_name, entropy_coff= 'entropy_coeff_' + str(args.entropy_coef), folder = args.folder)
     logger.save_args(args)
 
     print ("---------------------------------------")
@@ -247,34 +247,34 @@ def main():
             """
             Training the Baseline critic (f(s, \mu(s)))
             """
-            baseline_target.zero_grad()
-            #trade-off between two constraints when training baseline
-            lambda_baseline = 1
+            # baseline_target.zero_grad()
+            # #trade-off between two constraints when training baseline
+            # lambda_baseline = 1
 
-            ## f(s, \mu(s))
-            current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
-            #current_baseline.volatile=False
+            # ## f(s, \mu(s))
+            # current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
+            # #current_baseline.volatile=False
              
-            ## \grad f(s,a)
-            grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True, create_graph=True)
+            # ## \grad f(s,a)
+            # grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True, create_graph=True)
 
-            ## MSE : (Q - f)^{2}
-            baseline_loss = (q_batch.detach() - current_baseline).pow(2).mean()
-            # baseline_loss.volatile=True
+            # ## MSE : (Q - f)^{2}
+            # baseline_loss = (q_batch.detach() - current_baseline).pow(2).mean()
+            # # baseline_loss.volatile=True
 
-            actor.zero_grad()
-            baseline_target.zero_grad()
-            grad_norm = 0
-            for grad_1, grad_2 in zip(grad_params, grad_baseline_params):
-                grad_norm += grad_1.data.pow(2).sum() - grad_2.pow(2).sum()
-            grad_norm = grad_norm.sqrt()
+            # actor.zero_grad()
+            # baseline_target.zero_grad()
+            # grad_norm = 0
+            # for grad_1, grad_2 in zip(grad_params, grad_baseline_params):
+            #     grad_norm += grad_1.data.pow(2).sum() - grad_2.pow(2).sum()
+            # grad_norm = grad_norm.sqrt()
             
-            ##Loss for the Baseline approximator (f)  
-            overall_loss = baseline_loss + lambda_baseline * grad_norm
+            # ##Loss for the Baseline approximator (f)  
+            # overall_loss = baseline_loss + lambda_baseline * grad_norm
 
-            overall_loss.backward()
+            # overall_loss.backward()
 
-            baseline_optim.step()
+            # baseline_optim.step()
 
             soft_update(target_actor, actor, tau_soft_update)
             soft_update(critic_target, critic, tau_soft_update)
