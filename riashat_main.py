@@ -76,8 +76,6 @@ def main():
     print ('Saving to', logger.save_folder)
     print ("---------------------------------------")    
 
-
-
     if args.vis:
         from visdom import Visdom
         viz = Visdom()
@@ -262,22 +260,21 @@ def main():
 
             ## MSE : (Q - f)^{2}
             baseline_loss = (q_batch.detach() - current_baseline).pow(2).mean()
-
+            # baseline_loss.volatile=True
 
             actor.zero_grad()
             baseline_target.zero_grad()
             grad_norm = 0
-
             for grad_1, grad_2 in zip(grad_params, grad_baseline_params):
                 grad_norm += grad_1.data.pow(2).sum() - grad_2.pow(2).sum()
             grad_norm = grad_norm.sqrt()
-              
+            
             ##Loss for the Baseline approximator (f)  
             overall_loss = baseline_loss + lambda_baseline * grad_norm
+
             overall_loss.backward()
 
             baseline_optim.step()
-
 
             soft_update(target_actor, actor, tau_soft_update)
             soft_update(critic_target, critic, tau_soft_update)

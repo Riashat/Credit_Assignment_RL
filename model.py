@@ -52,7 +52,9 @@ class FFPolicy_discrete(nn.Module):
 
         log_probs = F.log_softmax(x)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
+    
 
+        dist_entropy.cuda()        
 
         return action, probs, states, dist_entropy
 
