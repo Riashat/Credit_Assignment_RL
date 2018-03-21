@@ -1,2 +1,3 @@
-#{"t_start": 1521652963.1962886, "env_id": "PongNoFrameskip-v4"}
+#{"env_id": "PongNoFrameskip-v4", "t_start": 1521653835.8874671}
 r,l,t
+-21.0,760,20.756583

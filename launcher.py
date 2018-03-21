@@ -22,6 +22,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--experiments', type=int, default=5)
 parser.add_argument('--policy', type=str, default="a2c")
 parser.add_argument('--lr', type=float, default=7e-4, help="learning rate")
+
+parser.add_argument('--actor_lr', type=float, default=1e-4, help='actor learning rate (default: 1e-4)')
+parser.add_argument('--critic_lr', type=float, default=1e-3, help='critic learning rate (default: 1e-3)')
+
+parser.add_argument('--batch_size', type=int, default=64, help='number of batches for ppo (default: 32)')
+
 parser.add_argument('--eps', type=float, default=1e-5, help='RMSprop optimizer epsilon (default: 1e-5)')
 parser.add_argument('--alpha', type=float, default=0.99, help='RMSprop optimizer apha (default: 0.99)')
 parser.add_argument('--use-gae', action='store_true', default=False, help='use generalized advantage estimation')
@@ -61,12 +67,20 @@ folder = args.f
 learning_rate_search = [0.4]
 entropy_coef = [0.01, 0.03, 0.05]
 
+"""
+Specify other hyperparameters to search over here- 
+"""
+
 
 grid = [] 
 grid += [['-env_name', [env_name]]]
 grid += [['-seed', [seed]]]
 grid += [['-lr', learning_rate_search]]
 grid += [['-entropy_coef', entropy_coef]]
+grid += [['-actor_lr', [actor_lr]]]
+grid += [['-critic_lr', [critic_lr]]]
+grid += [['-batch_size', [batch_size]]]
+
 
 grid += [['-f', [folder]]]
 #grid += [['-gpu', [gpu]]]

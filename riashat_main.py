@@ -117,8 +117,8 @@ def main():
         target_actor.cuda()
         baseline_target.cuda()
 
-    actor_optim = optim.Adam(actor.parameters(), lr=1e-4)    
-    critic_optim = optim.Adam(critic.parameters(), lr=1e-3)
+    actor_optim = optim.Adam(actor.parameters(), lr=args.actor_lr)    
+    critic_optim = optim.Adam(critic.parameters(), lr=args.critic_lr)
     baseline_optim = optim.Adam(actor.parameters(), lr=1e-4)
     tau_soft_update = 0.001
 
@@ -183,7 +183,6 @@ def main():
             pre_state= rollouts.observations[step].cpu().numpy()
             update_current_obs(obs)
            
-            # mem_buffer.add((pre_state, current_obs, action_log_prob.data.cpu().numpy(), reward, done))
             rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, dist_entropy.data,  value.data, reward, masks)
 
 
@@ -192,8 +191,6 @@ def main():
         nth_state = rollouts.observations[-1].cpu().numpy()
         current_action = rollouts.action_log_probs[0].cpu().numpy()
         current_action_dist_entropy = rollouts.dist_entropy[0].cpu().numpy()
-
-        ##TODO : rollouts.dist_entropy size (6 instead of 5)
         
         mem_buffer.add( (current_state, nth_state, current_action, nth_step_return, done, current_action_dist_entropy) )
         action, action_log_prob, states, dist_entropy = actor.act(Variable(rollouts.observations[-1], volatile=True),
@@ -205,7 +202,7 @@ def main():
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
 
-        bs_size = 64
+        bs_size = args.batch_size
         if len(mem_buffer.storage) >= bs_size :
         #if True:
             ##samples from the replay buffer
