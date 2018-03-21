@@ -234,7 +234,7 @@ def main():
             policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
 
             ## Actor update with entropy penalty
-            policy_loss = policy_loss.mean() - 0.01 * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
+            policy_loss = policy_loss.mean() - args.entropy_coef * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
 
             #gradient wrt to actor loss 
             grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
