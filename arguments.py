@@ -9,7 +9,7 @@ def get_args():
                         help='algorithm to use: ddpg | a2c | ppo | acktr')
     parser.add_argument('--lr', type=float, default=7e-4,
                         help='learning rate (default: 7e-4)')
-    parser.add_argument('--actor_lr', type=float, default=1e-4,
+    parser.add_argument('--actor_lr', type=float, default=1e-6,
                         help='actor learning rate (default: 7e-4)')
     parser.add_argument('--critic_lr', type=float, default=1e-3,
                         help='critic learning rate (default: 7e-4)')

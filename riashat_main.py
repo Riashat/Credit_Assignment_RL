@@ -69,12 +69,12 @@ def main():
 
     os.environ['OMP_NUM_THREADS'] = '1'
 
-    logger = Logger(environment_name = args.env_name, entropy_coff= 'entropy_coeff_' + str(args.entropy_coef), folder = args.folder)
-    logger.save_args(args)
+    # logger = Logger(environment_name = args.env_name, entropy_coff= 'entropy_coeff_' + str(args.entropy_coef), folder = args.folder)
+    # logger.save_args(args)
 
-    print ("---------------------------------------")
-    print ('Saving to', logger.save_folder)
-    print ("---------------------------------------")    
+    # print ("---------------------------------------")
+    # print ('Saving to', logger.save_folder)
+    # print ("---------------------------------------")    
 
     if args.vis:
         from visdom import Visdom
@@ -147,15 +147,23 @@ def main():
         rollouts.cuda()
 
     start = time.time()
+
+
+    # import pdb; pdb.set_trace()
+    # grad_params = torch.autograd.grad(Variable(torch.randn(1)), actor.parameters())
+
     for j in range(num_updates):
+
+        temperature = 1.0
 
         ## num_steps = 5 as in A2C
         for step in range(args.num_steps):
-
+            temperature = temperature / (step + 1)
             # Sample actions
             action, action_log_prob, states, dist_entropy = actor.act(Variable(rollouts.observations[step], volatile=True),
                                                                       Variable(rollouts.states[step], volatile=True),
-                                                                      Variable(rollouts.masks[step], volatile=True))
+                                                                      Variable(rollouts.masks[step], volatile=True),
+                                                                      temperature, envs.action_space.n, args.num_processes)
 
             value = critic.forward(Variable(rollouts.observations[step], volatile=True), action_log_prob)
 
@@ -193,10 +201,13 @@ def main():
         current_action_dist_entropy = rollouts.dist_entropy[0].cpu().numpy()
         
         mem_buffer.add( (current_state, nth_state, current_action, nth_step_return, done, current_action_dist_entropy) )
-        action, action_log_prob, states, dist_entropy = actor.act(Variable(rollouts.observations[-1], volatile=True),
+        action, action_log_prob, states, dist_entropy= actor.act(Variable(rollouts.observations[-1], volatile=True),
                                             Variable(rollouts.states[-1], volatile=True),
-                                            Variable(rollouts.masks[-1], volatile=True))#[0].data
+                                            Variable(rollouts.masks[-1], volatile=True), temperature, envs.action_space.n, args.num_processes)#[0].data
 
+
+
+        ##next_value = critic.forward(Variable(rollouts.observations[-1], volatile=True), action_log_prob).data
         next_value = critic.forward(Variable(rollouts.observations[-1], volatile=True), action_log_prob).data
 
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
@@ -205,6 +216,7 @@ def main():
         bs_size = args.batch_size
         if len(mem_buffer.storage) >= bs_size :
         #if True:
+
             ##samples from the replay buffer
             state, next_state, action, returns, done, entropy_log_prob = mem_buffer.sample(bs_size)
 
@@ -215,8 +227,13 @@ def main():
             #current Q estimate
             q_batch = critic(to_tensor(state), to_tensor(action))
 
+            # import ipdb; ipdb.set_trace()
             # target Q estimate
-            next_q_values = critic_target(to_tensor(next_state, volatile=True),target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))[0])
+            next_state_action_probs = target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))
+
+            # import ipdb; ipdb.set_trace()
+
+            next_q_values = critic_target(to_tensor(next_state, volatile=True), next_state_action_probs[1])
             next_q_values.volatile=False
             target_q_batch = to_tensor(returns) + args.gamma * to_tensor(done.astype(np.float))*next_q_values
 
@@ -233,12 +250,20 @@ def main():
             ## Actor update with entropy penalty
             policy_loss = policy_loss.mean() - args.entropy_coef * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
 
+            # if j ==63:
+            #     import pdb; pdb.set_trace()
+            #     grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
+            # else:
+            #     grad_params[:] = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
+
             #gradient wrt to actor loss 
             grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
             policy_loss.backward()
             ### TODO : Do we need gradient clipping?
-            #nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
+            gradient_norms = nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
+            
+            print("gradient_norms", gradient_norms)
             actor_optim.step()
 
             """
@@ -251,7 +276,7 @@ def main():
             # ## f(s, \mu(s))
             # current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
             # #current_baseline.volatile=False
-             
+            
             # ## \grad f(s,a)
             # grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True, create_graph=True)
 
@@ -316,8 +341,8 @@ def main():
             all_value_loss = [value_loss.data.cpu().numpy()[0]]
             all_policy_loss = [policy_loss.data.cpu().numpy()[0]]
 
-            logger.record_data(final_rewards_mean, final_rewards_median, final_rewards_min, final_rewards_max, all_value_loss, all_policy_loss)
-            logger.save()
+            # logger.record_data(final_rewards_mean, final_rewards_median, final_rewards_min, final_rewards_max, all_value_loss, all_policy_loss)
+            # # logger.save()
 
 
         
