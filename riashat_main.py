@@ -257,7 +257,12 @@ def main():
             #     grad_params[:] = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
             #gradient wrt to actor loss 
-            grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
+            if j == 0:
+                grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
+            else:
+                grad_params[:] = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
+                
+#             grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
             policy_loss.backward()
             ### TODO : Do we need gradient clipping?
