@@ -34,12 +34,13 @@ num_updates = int(args.num_frames) // args.num_steps // args.num_processes
 USE_CUDA = torch.cuda.is_available()
 FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 
+
+
 # soft update after the actor and critic updates
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(
-            target_param.data * (1.0 - tau) + param.data * tau
-        )
+            target_param.data * (1.0 - tau) + param.data * tau)
 
 torch.manual_seed(args.seed)
 if args.cuda:
@@ -72,7 +73,10 @@ def main():
     # logger = Logger(environment_name = args.env_name, entropy_coff= 'entropy_coeff_' + str(args.entropy_coef), folder = args.folder)
     # logger.save_args(args)
 
-    # print ("---------------------------------------")
+    #
+
+
+    print ("---------------------------------------")
     # print ('Saving to', logger.save_folder)
     # print ("---------------------------------------")
 
@@ -117,7 +121,9 @@ def main():
         target_actor.cuda()
         baseline_target.cuda()
 
+
     actor_optim = optim.Adam(actor.parameters(), lr=args.actor_lr)
+    #critic_optim = optim.Adam(filter(lambda p: p.requires_grad, critic.parameters()), lr=args.critic_lr)
     critic_optim = optim.Adam(critic.parameters(), lr=args.critic_lr)
     baseline_optim = optim.Adam(actor.parameters(), lr=1e-4)
     tau_soft_update = 0.001
@@ -215,7 +221,7 @@ def main():
 
         bs_size = args.batch_size
         if len(mem_buffer.storage) >= bs_size :
-        #if True:
+        #if True
 
             ##samples from the replay buffer
             state, next_state, action, returns, done, entropy_log_prob = mem_buffer.sample(bs_size)
@@ -240,6 +246,7 @@ def main():
             #Critic loss estimate and update
             critic.zero_grad()
             value_loss = criterion(q_batch, target_q_batch)
+
             gradients = torch.autograd.grad(value_loss, critic.parameters(), allow_unused=True, retain_graph=True, create_graph=True, only_inputs=True)[0]
             gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * args.lambda_
             gradient_penalty.backward()
@@ -252,7 +259,11 @@ def main():
             policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
 
             ## Actor update with entropy penalty
-            policy_loss = policy_loss.mean() - args.entropy_coef * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
+            current_target_probs = target_actor(to_tensor(state, volatile=True), to_tensor(state, volatile=True), to_tensor(state, volatile=True))[1]
+            current_probs = actor(to_tensor(state), to_tensor(state), to_tensor(state))[1]
+            kl_cons = criterion(current_probs, current_target_probs)
+            policy_loss = policy_loss.mean() - args.entropy_coef * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda() + args.kl_cons *kl_cons
+
             grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
 

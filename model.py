@@ -5,6 +5,8 @@ from distributions import Categorical, DiagGaussian
 from utils import orthogonal
 import numpy as np
 from torch.autograd import Variable
+from spectral_normalization import SpectralNorm
+
 
 USE_CUDA = torch.cuda.is_available()
 FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
@@ -40,14 +42,14 @@ class FFPolicy_discrete(nn.Module):
     def forward(self, inputs, states, masks):
         raise NotImplementedError
 
-    def act(self, inputs, states, masks, temperature, action_space, num_processes, deterministic=True):
+    def act(self, inputs, states, masks, temperature, action_space, num_processes, deterministic=False):
         x, pre_softmax = self(inputs, states, masks)
         probs = F.softmax(pre_softmax)
-        probs = probs ** (1 / temperature)
+        #probs = probs ** (1 / temperature)
         ## add Gaussian noise to probs
         OU_Noise = np.random.normal(0, 0.5, size=(num_processes,action_space))
         OU_Noise = Variable(torch.from_numpy(OU_Noise), volatile=False, requires_grad=False).type(FLOAT)
-        probs = probs + OU_Noise
+        probs = probs + 0.0 * OU_Noise
 
         probs = F.softmax(probs)
 
@@ -87,30 +89,30 @@ class Critic(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
         self.bn3 = nn.BatchNorm2d(64)
 
-        ### With Batch Norm added to the Critic
-        # self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
-        # self.bn1 = nn.BatchNorm2d(32)
-        # self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        # self.bn2 = nn.BatchNorm2d(64)
-        # self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        # self.bn3 = nn.BatchNorm2d(32)
-
-
         self.fc4 = nn.Linear(7 * 7 * 64, 512)
         self.fc_action = nn.Linear(num_actions, 256)
         self.fc6 = nn.Linear(512 + 256 , 256)
-
         self.fc7 = nn.Linear(256 , 1)
+        '''
+
+        self.conv1 = SpectralNorm(nn.Conv2d(in_channels, 32, kernel_size=8, stride=4))
+        self.conv2 = SpectralNorm(nn.Conv2d(32, 64, kernel_size=4, stride=2))
+        self.conv3 = SpectralNorm(nn.Conv2d(64, 64, kernel_size=3, stride=1))
+        self.fc4 = SpectralNorm(nn.Linear(7 * 7 * 64, 512))
+        self.fc_action = SpectralNorm(nn.Linear(num_actions, 256))
+        self.fc6 = SpectralNorm(nn.Linear(512 + 256 , 256))
+        self.fc7 = SpectralNorm(nn.Linear(256 , 1))
+        '''
+
 
     def forward(self, x, action):
-        # x = F.relu(self.bn1(self.conv1(x)))
-        # x = F.relu(self.bn2(self.conv2(x)))
-        # x = F.relu(self.bn3(self.conv3(x)))
+        #x = F.relu(self.bn1(self.conv1(x)))
+        #x = F.relu(self.bn2(self.conv2(x)))
+        #x = F.relu(self.bn3(self.conv3(x)))
 
         x = F.relu((self.conv1(x)))
         x = F.relu((self.conv2(x)))
@@ -118,9 +120,6 @@ class Critic(nn.Module):
 
         action_emb =  F.relu(self.fc_action(action))
         x = F.relu(self.fc4(x.view(x.size(0), -1)))
-
-
-        #x = F.relu(self.fc6( torch.cat((x, action_emb), dim=1)))
         x = self.fc6(torch.cat((x, action_emb), dim=1))
 
         x = F.relu(x)
