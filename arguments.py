@@ -13,13 +13,16 @@ def get_args():
                         help='actor learning rate (default: 7e-4)')
     parser.add_argument('--critic_lr', type=float, default=1e-3,
                         help='critic learning rate (default: 7e-4)')
-    parser.add_argument('--lambda_', type=float, default=0.5,
+    parser.add_argument('--lambda_grad_penalty', type=float, default=0.5,
+                        help='lambda for the gradient penalty')
+
+    parser.add_argument('--lambda_second_order_grads', type=float, default=0.1,
                         help='lambda for the gradient penalty')
 
     parser.add_argument('--second_order_grads', default=False,
                         help='enable second order gradient correction for baseline ')
 
-    parser.add_argument('--actor_kl_lambda', type=float, default=0.1,
+    parser.add_argument('--actor_kl_lambda', type=float, default=0.01,
                         help='lambda coeffecient(default: 1)')
 
     parser.add_argument('--actor_several_updates', default=True,
@@ -27,6 +30,9 @@ def get_args():
 
     parser.add_argument('--actor_updates', type=int, default=100,
                         help='Number of actor updates for every time step wrt critic')
+
+    parser.add_argument('--gradient_penalty', default=True,
+                        help='Whether to apply gradient penalty or not')
 
     parser.add_argument('--eps', type=float, default=1e-5,
                         help='RMSprop optimizer epsilon (default: 1e-5)')
@@ -52,7 +58,7 @@ def get_args():
                         help='number of forward steps in A2C (default: 5)')
     parser.add_argument('--ppo-epoch', type=int, default=4,
                         help='number of ppo epochs (default: 4)')
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=128,
                         help='number of batches for ppo (default: 32)')
     parser.add_argument('--clip-param', type=float, default=0.2,
                         help='ppo clip parameter (default: 0.2)')

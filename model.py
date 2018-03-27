@@ -46,7 +46,7 @@ class FFPolicy_discrete(nn.Module):
         probs = F.softmax(pre_softmax)
         probs = probs ** (1 / temperature)
         ## add Gaussian noise to probs
-        OU_Noise = np.random.normal(0, 0.1, size=(num_processes,action_space))
+        OU_Noise = np.random.normal(0, 0.5, size=(num_processes,action_space))
         OU_Noise = Variable(torch.from_numpy(OU_Noise), volatile=False, requires_grad=False).type(FLOAT)
         probs = probs + OU_Noise
 
@@ -124,11 +124,8 @@ class Critic(nn.Module):
 
         action_emb =  F.relu(self.fc_action(action))
         x = F.relu(self.fc4(x.view(x.size(0), -1)))
-        
-
         #x = F.relu(self.fc6( torch.cat((x, action_emb), dim=1)))
         x = self.fc6(torch.cat((x, action_emb), dim=1))
-        
         x = F.relu(x)
 
         return self.fc7(x)

@@ -148,10 +148,6 @@ def main():
 
     start = time.time()
 
-
-    # import pdb; pdb.set_trace()
-    # grad_params = torch.autograd.grad(Variable(torch.randn(1)), actor.parameters())
-
     for j in range(num_updates):
 
         temperature = 1.0
@@ -205,18 +201,11 @@ def main():
                                             Variable(rollouts.states[-1], volatile=True),
                                             Variable(rollouts.masks[-1], volatile=True), temperature, envs.action_space.n, args.num_processes)#[0].data
 
-
-
-        ##next_value = critic.forward(Variable(rollouts.observations[-1], volatile=True), action_log_prob).data
         next_value = critic.forward(Variable(rollouts.observations[-1], volatile=True), action_log_prob).data
-
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
-
 
         bs_size = args.batch_size
         if len(mem_buffer.storage) >= bs_size :
-        #if True:
-
             ##samples from the replay buffer
             state, next_state, action, returns, done, entropy_log_prob = mem_buffer.sample(bs_size)
 
@@ -226,7 +215,6 @@ def main():
 
             #current Q estimate
             q_batch = critic(to_tensor(state), to_tensor(action))
-
             # target Q estimate
             next_state_action_probs = target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))
 
@@ -236,17 +224,18 @@ def main():
 
             critic.zero_grad()
             value_loss = criterion(q_batch, target_q_batch)
-            gradients = torch.autograd.grad(value_loss, critic.parameters(), allow_unused=True, retain_graph=True, create_graph=True, only_inputs=True)[0]
-            gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * args.lambda_
-            gradient_penalty.backward()
 
-            #Critic loss estimate and update
-            # critic.zero_grad()
-            # value_loss = criterion(q_batch, target_q_batch)
-            # value_loss.backward()
+            if args.gradient_penalty == True:
+                gradients = torch.autograd.grad(value_loss, critic.parameters(), allow_unused=True, retain_graph=True, create_graph=True, only_inputs=True)[0]
+                gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * args.lambda_grad_penalty
+                gradient_penalty.backward()
+
+            else:
+                value_loss = criterion(q_batch, target_q_batch)
+                value_loss.backward()     
+
             critic_optim.step()
 
-            #evaluating actor_loss : - Q(s, \mu(s))
             actor.zero_grad()
             policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
 
@@ -266,26 +255,20 @@ def main():
                     policy_loss.backward(retain_variables=True)
             else:
                 policy_loss.backward()
-            
+
+            ##clipping of gradient norms             
             gradient_norms = nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
-            
-            
             print("gradient_norms", gradient_norms)
             actor_optim.step()
 
             if args.second_order_grads == True:
-
                 """
                 Training the Baseline critic (f(s, \mu(s)))
                 """
                 baseline_target.zero_grad()
-                #trade-off between two constraints when training baseline
-                lambda_baseline = 1
-
                 ## f(s, \mu(s))
                 current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
-                #current_baseline.volatile=False
-                
+                                
                 ## \grad f(s,a)
                 grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True, create_graph=True)
 
@@ -301,10 +284,8 @@ def main():
                 grad_norm = grad_norm.sqrt()
                 
                 ##Loss for the Baseline approximator (f)  
-                overall_loss = baseline_loss + lambda_baseline * grad_norm
-
+                overall_loss = baseline_loss + args.lambda_second_order_grads * grad_norm
                 overall_loss.backward()
-
                 baseline_optim.step()
 
             soft_update(target_actor, actor, tau_soft_update)
