@@ -5,6 +5,7 @@ from distributions import Categorical, DiagGaussian
 from utils import orthogonal
 import numpy as np
 from torch.autograd import Variable
+from spectral_normalization import SpectralNorm
 
 USE_CUDA = torch.cuda.is_available()
 FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
@@ -45,13 +46,11 @@ class FFPolicy_discrete(nn.Module):
         probs = F.softmax(pre_softmax)
         probs = probs ** (1 / temperature)
         ## add Gaussian noise to probs
-        OU_Noise = np.random.normal(0, 0.5, size=(num_processes,action_space))
+        OU_Noise = np.random.normal(0, 0.1, size=(num_processes,action_space))
         OU_Noise = Variable(torch.from_numpy(OU_Noise), volatile=False, requires_grad=False).type(FLOAT)
-        probs = probs + 0.0 * OU_Noise
+        probs = probs + OU_Noise
 
         probs = F.softmax(probs)
-
-        # probs = probs ** (1 / temperature)
 
         if deterministic is False:
             # action = np.random.multinomial(1, probs).argmax()
@@ -62,8 +61,6 @@ class FFPolicy_discrete(nn.Module):
         
         log_probs = F.log_softmax(x)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
-    
-
         # dist_entropy.cuda()        
 
         return action, pre_softmax, states, dist_entropy
@@ -100,12 +97,21 @@ class Critic(nn.Module):
         # self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         # self.bn3 = nn.BatchNorm2d(32)
 
-
         self.fc4 = nn.Linear(7 * 7 * 64, 512)
         self.fc_action = nn.Linear(num_actions, 256)
         self.fc6 = nn.Linear(512 + 256 , 256)
         
         self.fc7 = nn.Linear(256 , 1)
+
+        ### With Spectral Normalization addded to the critic
+        # self.conv1 = SpectralNorm(nn.Conv2d(in_channels, 32, kernel_size=8, stride=4))
+        # self.conv2 = SpectralNorm(nn.Conv2d(32, 64, kernel_size=4, stride=2))
+        # self.conv3 = SpectralNorm(nn.Conv2d(64, 64, kernel_size=3, stride=1))
+        # self.fc4 = SpectralNorm(nn.Linear(7 * 7 * 64, 512))
+        # self.fc_action = SpectralNorm(nn.Linear(num_actions, 256))
+        # self.fc6 = SpectralNorm(nn.Linear(512 + 256 , 256))
+        # self.fc7 = SpectralNorm(nn.Linear(256 , 1))
+
 
     def forward(self, x, action):
         # x = F.relu(self.bn1(self.conv1(x)))
