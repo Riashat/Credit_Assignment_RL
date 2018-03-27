@@ -25,7 +25,7 @@ class LayerNorm(torch.nn.Module):
          self.eps = 1e-6
 
 
-     def forward(self, x): 
+     def forward(self, x):
          mean = x.mean(-1, keepdim=True)
          std = torch.sqrt(x.var(dim=1, keepdim=True) + self.eps)
          output = self.gamma * (x - mean) / (std + self.eps) + self.beta
@@ -47,7 +47,7 @@ class FFPolicy_discrete(nn.Module):
         ## add Gaussian noise to probs
         OU_Noise = np.random.normal(0, 0.5, size=(num_processes,action_space))
         OU_Noise = Variable(torch.from_numpy(OU_Noise), volatile=False, requires_grad=False).type(FLOAT)
-        probs = probs + 0.0 * OU_Noise
+        probs = probs + OU_Noise
 
         probs = F.softmax(probs)
 
@@ -59,12 +59,12 @@ class FFPolicy_discrete(nn.Module):
 
         else:
             action = probs.max(1, keepdim=True)[1]
-        
+
         log_probs = F.log_softmax(x)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
-    
 
-        # dist_entropy.cuda()        
+
+        # dist_entropy.cuda()
 
         return action, pre_softmax, states, dist_entropy
 
@@ -104,7 +104,7 @@ class Critic(nn.Module):
         self.fc4 = nn.Linear(7 * 7 * 64, 512)
         self.fc_action = nn.Linear(num_actions, 256)
         self.fc6 = nn.Linear(512 + 256 , 256)
-        
+
         self.fc7 = nn.Linear(256 , 1)
 
     def forward(self, x, action):
@@ -118,11 +118,11 @@ class Critic(nn.Module):
 
         action_emb =  F.relu(self.fc_action(action))
         x = F.relu(self.fc4(x.view(x.size(0), -1)))
-        
+
 
         #x = F.relu(self.fc6( torch.cat((x, action_emb), dim=1)))
         x = self.fc6(torch.cat((x, action_emb), dim=1))
-        
+
         x = F.relu(x)
 
         return self.fc7(x)

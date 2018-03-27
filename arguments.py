@@ -26,6 +26,8 @@ def get_args():
                         help='gae parameter (default: 0.95)')
     parser.add_argument('--entropy_coef', type=float, default=0.01,
                         help='entropy term coefficient (default: 0.01)')
+    parser.add_argument('--lambda_', type=float, default=1,
+                        help='lambda coeffecient(default: 1)')
     parser.add_argument('--value-loss-coef', type=float, default=0.5,
                         help='value loss coefficient (default: 0.5)')
     parser.add_argument('--max-grad-norm', type=float, default=0.5,

@@ -38,7 +38,7 @@ FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(
-            target_param.data * (1.0 - tau) + param.data * tau 
+            target_param.data * (1.0 - tau) + param.data * tau
         )
 
 torch.manual_seed(args.seed)
@@ -74,7 +74,7 @@ def main():
 
     # print ("---------------------------------------")
     # print ('Saving to', logger.save_folder)
-    # print ("---------------------------------------")    
+    # print ("---------------------------------------")
 
     if args.vis:
         from visdom import Visdom
@@ -117,7 +117,7 @@ def main():
         target_actor.cuda()
         baseline_target.cuda()
 
-    actor_optim = optim.Adam(actor.parameters(), lr=args.actor_lr)    
+    actor_optim = optim.Adam(actor.parameters(), lr=args.actor_lr)
     critic_optim = optim.Adam(critic.parameters(), lr=args.critic_lr)
     baseline_optim = optim.Adam(actor.parameters(), lr=1e-4)
     tau_soft_update = 0.001
@@ -190,7 +190,7 @@ def main():
 
             pre_state= rollouts.observations[step].cpu().numpy()
             update_current_obs(obs)
-           
+
             rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, dist_entropy.data,  value.data, reward, masks)
 
 
@@ -199,7 +199,7 @@ def main():
         nth_state = rollouts.observations[-1].cpu().numpy()
         current_action = rollouts.action_log_probs[0].cpu().numpy()
         current_action_dist_entropy = rollouts.dist_entropy[0].cpu().numpy()
-        
+
         mem_buffer.add( (current_state, nth_state, current_action, nth_step_return, done, current_action_dist_entropy) )
         action, action_log_prob, states, dist_entropy= actor.act(Variable(rollouts.observations[-1], volatile=True),
                                             Variable(rollouts.states[-1], volatile=True),
@@ -240,7 +240,11 @@ def main():
             #Critic loss estimate and update
             critic.zero_grad()
             value_loss = criterion(q_batch, target_q_batch)
-            value_loss.backward()
+            gradients = torch.autograd.grad(value_loss, critic.parameters(), allow_unused=True, retain_graph=True, create_graph=True, only_inputs=True)[0]
+            gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * args.lambda_
+            gradient_penalty.backward()
+
+            #value_loss.backward()
             critic_optim.step()
 
             #evaluating actor_loss : - Q(s, \mu(s))
@@ -249,26 +253,14 @@ def main():
 
             ## Actor update with entropy penalty
             policy_loss = policy_loss.mean() - args.entropy_coef * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda()
+            grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
-            # if j ==63:
-            #     import pdb; pdb.set_trace()
-            #     grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
-            # else:
-            #     grad_params[:] = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
-            #gradient wrt to actor loss 
-            if j == 0:
-                grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
-            else:
-                grad_params[:] = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
-                
-#             grad_params = torch.autograd.grad(policy_loss, actor.parameters(), retain_graph=True)
 
             policy_loss.backward()
             ### TODO : Do we need gradient clipping?
             gradient_norms = nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
-            
-            print("gradient_norms", gradient_norms)
+
             actor_optim.step()
 
             """
@@ -281,7 +273,7 @@ def main():
             # ## f(s, \mu(s))
             # current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
             # #current_baseline.volatile=False
-            
+
             # ## \grad f(s,a)
             # grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True, create_graph=True)
 
@@ -295,8 +287,8 @@ def main():
             # for grad_1, grad_2 in zip(grad_params, grad_baseline_params):
             #     grad_norm += grad_1.data.pow(2).sum() - grad_2.pow(2).sum()
             # grad_norm = grad_norm.sqrt()
-            
-            # ##Loss for the Baseline approximator (f)  
+
+            # ##Loss for the Baseline approximator (f)
             # overall_loss = baseline_loss + lambda_baseline * grad_norm
 
             # overall_loss.backward()
@@ -329,14 +321,14 @@ def main():
         if j % args.log_interval == 0 and len(mem_buffer.storage) >= bs_size:
             end = time.time()
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
-            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}, Entropy {:.5f}".
+            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}, Entropy {:.5f}, Gradient Norm{:.5f}".
                 format(j, total_num_steps,
                        int(total_num_steps / (end - start)),
                        final_rewards.mean(),
                        final_rewards.median(),
                        final_rewards.min(),
                        final_rewards.max(),
-                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0], entropy_log_prob.mean()))
+                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0], entropy_log_prob.mean(), gradient_norms))
 
             final_rewards_mean = [final_rewards.mean()]
             final_rewards_median = [final_rewards.median()]
@@ -350,7 +342,7 @@ def main():
             # # logger.save()
 
 
-        
+
         if args.vis and j % args.vis_interval == 0:
 
             try:
