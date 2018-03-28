@@ -17,7 +17,8 @@ from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from envs import make_env
 from kfac import KFACOptimizer
-from model import CNNPolicy, MLPPolicy, Critic, Actor
+from model import Critic, Actor, Baseline_Critic
+#from model import CNNPolicy, MLPPolicy, Critic, Actor
 from storage import RolloutStorage
 from visualize import visdom_plot
 from replay_buffer import ReplayBuffer
@@ -25,6 +26,7 @@ from replay_buffer import ReplayBuffer
 from utils import Logger
 
 args = get_args()
+assert args.algo in ["a2c"]
 criterion = nn.MSELoss()
 
 num_updates = int(args.num_frames) // args.num_steps // args.num_processes
@@ -36,7 +38,7 @@ FLOAT = torch.cuda.FloatTensor if USE_CUDA else torch.FloatTensor
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(
-            target_param.data * (1.0 - tau) + param.data * tau
+            target_param.data * (1.0 - tau) + param.data * tau 
         )
 
 torch.manual_seed(args.seed)
@@ -67,13 +69,12 @@ def main():
 
     os.environ['OMP_NUM_THREADS'] = '1'
 
-    logger = Logger(environment_name = args.env_name,folder = args.folder)
-    logger.save_args(args)
+    # logger = Logger(environment_name = args.env_name, entropy_coff= 'entropy_coeff_' + str(args.entropy_coef), folder = args.folder)
+    # logger.save_args(args)
 
-    print ("---------------------------------------")
-    print ('Saving to', logger.save_folder)
-    print ("---------------------------------------")    
-
+    # print ("---------------------------------------")
+    # print ('Saving to', logger.save_folder)
+    # print ("---------------------------------------")    
 
     if args.vis:
         from visdom import Visdom
@@ -91,7 +92,6 @@ def main():
     if len(envs.observation_space.shape) == 1:
         envs = VecNormalize(envs)
 
-
     obs_shape = envs.observation_space.shape
     obs_shape = (obs_shape[0] * args.num_stack, *obs_shape[1:])
 
@@ -107,6 +107,7 @@ def main():
         target_actor = Actor(obs_shape[0], envs.action_space, args.recurrent_policy, envs.action_space.n)
         critic = Critic(in_channels=4, num_actions=envs.action_space.n)
         critic_target = Critic(in_channels=4, num_actions=envs.action_space.n)
+        baseline_target = Baseline_Critic(in_channels=4, num_actions=envs.action_space.n)
 
 
     if args.cuda:
@@ -114,9 +115,11 @@ def main():
         critic.cuda()
         critic_target.cuda()
         target_actor.cuda()
+        baseline_target.cuda()
 
-    actor_optim = optim.Adam(actor.parameters(), lr=1e-4)    
-    critic_optim = optim.Adam(critic.parameters(), lr=1e-3)
+    actor_optim = optim.Adam(actor.parameters(), lr=args.actor_lr)    
+    critic_optim = optim.Adam(critic.parameters(), lr=args.critic_lr)
+    baseline_optim = optim.Adam(actor.parameters(), lr=1e-4)
     tau_soft_update = 0.001
 
     mem_buffer = ReplayBuffer()
@@ -144,17 +147,22 @@ def main():
         rollouts.cuda()
 
     start = time.time()
+
     for j in range(num_updates):
+
+        temperature = 1.0
 
         ## num_steps = 5 as in A2C
         for step in range(args.num_steps):
-
+            temperature = temperature / (step + 1)
             # Sample actions
-            action, action_log_prob, states = actor.act(Variable(rollouts.observations[step], volatile=True),
+            action, action_log_prob, states, dist_entropy = actor.act(Variable(rollouts.observations[step], volatile=True),
                                                                       Variable(rollouts.states[step], volatile=True),
-                                                                      Variable(rollouts.masks[step], volatile=True))
+                                                                      Variable(rollouts.masks[step], volatile=True),
+                                                                      temperature, envs.action_space.n, args.num_processes)
 
             value = critic.forward(Variable(rollouts.observations[step], volatile=True), action_log_prob)
+
             cpu_actions = action.data.squeeze(1).cpu().numpy()
 
             # Obser reward and next obs
@@ -178,57 +186,115 @@ def main():
 
             pre_state= rollouts.observations[step].cpu().numpy()
             update_current_obs(obs)
-            mem_buffer.add((pre_state, current_obs, action_log_prob.data.cpu().numpy(), reward, done))
-            rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, value.data, reward, masks)
+           
+            rollouts.insert(step, current_obs, states.data, action.data, action_log_prob.data, dist_entropy.data,  value.data, reward, masks)
 
-        action, action_log_prob, states  = actor.act(Variable(rollouts.observations[-1], volatile=True),
+
+        nth_step_return = rollouts.returns[0].cpu().numpy()
+        current_state = rollouts.observations[0].cpu().numpy()
+        nth_state = rollouts.observations[-1].cpu().numpy()
+        current_action = rollouts.action_log_probs[0].cpu().numpy()
+        current_action_dist_entropy = rollouts.dist_entropy[0].cpu().numpy()
+        
+        mem_buffer.add( (current_state, nth_state, current_action, nth_step_return, done, current_action_dist_entropy) )
+        action, action_log_prob, states, dist_entropy= actor.act(Variable(rollouts.observations[-1], volatile=True),
                                             Variable(rollouts.states[-1], volatile=True),
-                                            Variable(rollouts.masks[-1], volatile=True))#[0].data
+                                            Variable(rollouts.masks[-1], volatile=True), temperature, envs.action_space.n, args.num_processes)#[0].data
 
         next_value = critic.forward(Variable(rollouts.observations[-1], volatile=True), action_log_prob).data
-
-
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
-        if True:
+        bs_size = args.batch_size
+        if len(mem_buffer.storage) >= bs_size :
             ##samples from the replay buffer
-            state, next_state, action, reward, done = mem_buffer.sample(args.batch_size)
+            state, next_state, action, returns, done, entropy_log_prob = mem_buffer.sample(bs_size)
+
             next_state = next_state.reshape([-1, *obs_shape])
             state = state.reshape([-1, *obs_shape])
-            action = action.reshape([-1, 6])
+            action = action.reshape([-1, envs.action_space.n])
 
             #current Q estimate
             q_batch = critic(to_tensor(state), to_tensor(action))
-
-            """
-            Need to compute k-step returns here for the Q target
-            """
             # target Q estimate
-            next_q_values = critic_target(to_tensor(next_state, volatile=True),target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))[0])
+            next_state_action_probs = target_actor(to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True), to_tensor(next_state, volatile=True))
+
+            next_q_values = critic_target(to_tensor(next_state, volatile=True), next_state_action_probs[1])
             next_q_values.volatile=False
-            target_q_batch = to_tensor(reward) + args.gamma*to_tensor(done.astype(np.float))*next_q_values
+            target_q_batch = to_tensor(returns) + args.gamma * to_tensor(done.astype(np.float))*next_q_values
 
-
-            #Critic loss estimate and update
             critic.zero_grad()
             value_loss = criterion(q_batch, target_q_batch)
-            value_loss.backward()
+
+            if args.gradient_penalty == True:
+                gradients = torch.autograd.grad(value_loss, critic.parameters(), allow_unused=True, retain_graph=True, create_graph=True, only_inputs=True)[0]
+                gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * args.lambda_grad_penalty
+                gradient_penalty.backward()
+
+            else:
+                value_loss = criterion(q_batch, target_q_batch)
+                value_loss.backward()     
+
             critic_optim.step()
 
-            #evaluating actor_loss : - Q(s, \mu(s))
             actor.zero_grad()
             policy_loss = -critic(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
-            policy_loss = policy_loss.mean()
-            policy_loss.backward()
+
+            ### Soft trust region constraint for the actor
+            current_action_probs = actor(to_tensor(state, volatile=False), to_tensor(state, volatile=False), to_tensor(state, volatile=False))[0]
+            target_action_probs = target_actor(to_tensor(state, volatile=True), to_tensor(state, volatile=True), to_tensor(state, volatile=True))[0]
+
+            policy_regularizer = criterion(current_action_probs, target_action_probs)
+
+            ## Actor update with entropy penalty
+            policy_loss = policy_loss.mean() - args.entropy_coef * Variable(torch.from_numpy(np.expand_dims(entropy_log_prob.mean(), axis=0))).cuda() \
+                            + args.actor_kl_lambda * policy_regularizer
+
+
+            if args.actor_several_updates == True:
+                for p in range(args.actor_updates):
+                    policy_loss.backward(retain_variables=True)
+            else:
+                policy_loss.backward()
+
+            ##clipping of gradient norms             
+            gradient_norms = nn.utils.clip_grad_norm(actor.parameters(), args.max_grad_norm)
+            print("gradient_norms", gradient_norms)
             actor_optim.step()
 
+            if args.second_order_grads == True:
+                """
+                Training the Baseline critic (f(s, \mu(s)))
+                """
+                baseline_target.zero_grad()
+                ## f(s, \mu(s))
+                current_baseline = baseline_target(to_tensor(state),actor(to_tensor(state), to_tensor(state), to_tensor(state))[0])
+                                
+                ## \grad f(s,a)
+                grad_baseline_params = torch.autograd.grad(current_baseline.mean(), actor.parameters(), retain_graph=True, create_graph=True)
+
+                ## MSE : (Q - f)^{2}
+                baseline_loss = (q_batch.detach() - current_baseline).pow(2).mean()
+                # baseline_loss.volatile=True
+
+                actor.zero_grad()
+                baseline_target.zero_grad()
+                grad_norm = 0
+                for grad_1, grad_2 in zip(grad_params, grad_baseline_params):
+                    grad_norm += grad_1.data.pow(2).sum() - grad_2.pow(2).sum()
+                grad_norm = grad_norm.sqrt()
+                
+                ##Loss for the Baseline approximator (f)  
+                overall_loss = baseline_loss + args.lambda_second_order_grads * grad_norm
+                overall_loss.backward()
+                baseline_optim.step()
 
             soft_update(target_actor, actor, tau_soft_update)
             soft_update(critic_target, critic, tau_soft_update)
 
+
         rollouts.after_update()
 
-        if j % args.save_interval == 0 and args.save_dir != "":
+        if j % args.save_interval == 0 and args.save_dir != "" and len(mem_buffer.storage) >= bs_size:
             save_path = os.path.join(args.save_dir, args.algo)
             try:
                 os.makedirs(save_path)
@@ -245,17 +311,17 @@ def main():
 
             torch.save(save_model, os.path.join(save_path, args.env_name + ".pt"))
 
-        if j % args.log_interval == 0:
+        if j % args.log_interval == 0 and len(mem_buffer.storage) >= bs_size:
             end = time.time()
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
-            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}".
+            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, value loss {:.5f}, policy loss {:.5f}, Entropy {:.5f}".
                 format(j, total_num_steps,
                        int(total_num_steps / (end - start)),
                        final_rewards.mean(),
                        final_rewards.median(),
                        final_rewards.min(),
                        final_rewards.max(),
-                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0]))
+                       value_loss.data.cpu().numpy()[0], policy_loss.data.cpu().numpy()[0], entropy_log_prob.mean()))
 
             final_rewards_mean = [final_rewards.mean()]
             final_rewards_median = [final_rewards.median()]
@@ -265,11 +331,13 @@ def main():
             all_value_loss = [value_loss.data.cpu().numpy()[0]]
             all_policy_loss = [policy_loss.data.cpu().numpy()[0]]
 
-            logger.record_data(final_rewards_mean, final_rewards_median, final_rewards_min, final_rewards_max, all_value_loss, all_policy_loss)
-            logger.save()
+            # logger.record_data(final_rewards_mean, final_rewards_median, final_rewards_min, final_rewards_max, all_value_loss, all_policy_loss)
+            # # logger.save()
 
 
+        
         if args.vis and j % args.vis_interval == 0:
+
             try:
                 # Sometimes monitor doesn't properly flush the outputs
                 win = visdom_plot(viz, win, args.log_dir, args.env_name, args.algo)
